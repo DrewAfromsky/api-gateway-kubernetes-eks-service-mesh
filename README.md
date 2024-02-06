@@ -107,7 +107,7 @@
 		- Failed mTLS negotiations result in visible errors and alerts, indicating issues with certificates or configuration
 
 ##### Inference
-- From the project's root directory, run the following commands:
+- From the project's root directory, run the following commands (modify the AWS Account variable with your own):
 	- Provision the infra via AWS Cloudformation
 		- `source scripts/create_stack.sh`
 	- Push Docker images to ECR
