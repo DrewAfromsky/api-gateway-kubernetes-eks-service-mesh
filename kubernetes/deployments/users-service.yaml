@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: users
-        image: 648634786810.dkr.ecr.us-east-1.amazonaws.com/users-repository:latest
+        image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/users-repository:latest
         ports:
         - containerPort: 80
         resources:

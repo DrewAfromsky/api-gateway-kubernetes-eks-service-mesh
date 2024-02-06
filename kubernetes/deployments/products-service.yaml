@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: products
-        image: 648634786810.dkr.ecr.us-east-1.amazonaws.com/products-repository:latest
+        image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/products-repository:latest
         ports:
         - containerPort: 80
         resources:
