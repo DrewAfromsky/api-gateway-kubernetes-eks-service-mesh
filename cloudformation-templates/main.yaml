@@ -1,0 +1,533 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template for creating an EKS cluster with Kubernetes version 1.28.
+
+
+Parameters:
+  NodeInstanceType:
+    Type: String
+    Default: t3.medium
+    Description: EC2 instance type for the EKS worker nodes
+  NodeImageId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/eks/optimized-ami/1.28/amazon-linux-2/recommended/image_id
+    Description: AMI ID for EKS worker nodes compatible with Kubernetes 1.28
+  NodeGroupName:
+    Type: String
+    Default: drew-node-group
+    Description: Name of the EKS Node Group
+  ClusterName:
+    Type: String
+    Description: Name of the EKS cluster
+    Default: drew-eks-cluster
+
+Resources:
+  UsersRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: users-repository
+  OrdersRepository: 
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: orders-repository
+  ProductsRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: products-repository      
+  DrewVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: DrewVPC
+  DrewInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: DrewInternetGateway
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    DependsOn:
+      - DrewVPC
+      - DrewInternetGateway
+    Properties:
+      VpcId: !Ref DrewVPC
+      InternetGatewayId: !Ref DrewInternetGateway
+  PublicSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DrewVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnetOne
+  PublicSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DrewVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnetTwo
+  DrewRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DrewVPC
+      Tags:
+        - Key: Name
+          Value: DrewRouteTable
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref DrewRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref DrewInternetGateway
+  SubnetRouteTableAssociationOne:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetOne
+      RouteTableId: !Ref DrewRouteTable
+  SubnetRouteTableAssociationTwo:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetTwo
+      RouteTableId: !Ref DrewRouteTable
+  DrewNLBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: DrewNLBSecurityGroup
+      GroupDescription: Security group for DrewNLB
+      VpcId: !Ref DrewVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+  DrewNLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: DrewInternetGateway
+    Properties:
+      Name: DrewEksNlb
+      Scheme: internet-facing
+      Type: network
+      Subnets:
+        - !Ref PublicSubnetOne
+        - !Ref PublicSubnetTwo
+  DrewTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref DrewVPC
+      Protocol: "TCP"
+      Port: 80
+      TargetType: ip
+  DrewListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !GetAtt DrewTargetGroup.TargetGroupArn
+      LoadBalancerArn: !GetAtt DrewNLB.LoadBalancerArn
+      Port: 80
+      Protocol: "TCP"
+  EKSClusterSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: [DrewVpcLink, DrewTargetGroup, EKSClusterRole]
+    Properties:
+      GroupDescription: "Security group for EKS cluster"
+      VpcId: !Ref DrewVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: "eks-cluster-sg"
+  EKSClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: eks.amazonaws.com
+            Action: sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: EKSClusterPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:Describe*
+                  - ec2:CreateTags
+                  - ec2:DeleteTags
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupIngress
+                Resource: "*"
+  EKSCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref ClusterName
+      Version: "1.28"
+      RoleArn: !GetAtt EKSClusterRole.Arn
+      ResourcesVpcConfig:
+        SubnetIds:
+          - !Ref PublicSubnetOne
+          - !Ref PublicSubnetTwo
+        SecurityGroupIds:
+          - !GetAtt EKSClusterSecurityGroup.GroupId
+  NodeInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      Path: /
+  NodeGroup:
+    Type: AWS::EKS::Nodegroup
+    DependsOn: [NodeInstanceRole, EKSCluster]
+    Properties:
+      ClusterName: !Ref ClusterName
+      NodegroupName: !Ref NodeGroupName
+      NodeRole: !GetAtt NodeInstanceRole.Arn
+      Subnets:
+          - !Ref PublicSubnetOne
+          - !Ref PublicSubnetTwo
+      ScalingConfig:
+        DesiredSize: 1
+        MinSize: 1
+        MaxSize: 3
+      InstanceTypes:
+        - !Ref NodeInstanceType
+      AmiType: AL2_x86_64
+      DiskSize: 20
+  DrewAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: EKSMicroservicesAPI
+      Description: API Gateway to route traffic to EKS microservices
+  DrewAPIResourceUsers:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: 
+        Fn::GetAtt:
+          - "DrewAPI"
+          - "RootResourceId"
+      PathPart: 'users'
+      RestApiId: !Ref DrewAPI
+  DrewAPIResourceProducts:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: 
+        Fn::GetAtt:
+          - "DrewAPI"
+          - "RootResourceId"
+      PathPart: 'products'
+      RestApiId: !Ref DrewAPI
+  DrewAPIResourceOrders:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: 
+        Fn::GetAtt:
+          - "DrewAPI"
+          - "RootResourceId"
+      PathPart: 'orders'
+      RestApiId: !Ref DrewAPI
+  
+  # TODO: Add request/response models
+  DrewAPIMethodUsers:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      ResourceId: !Ref DrewAPIResourceUsers
+      RestApiId: !Ref DrewAPI
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: HTTP_PROXY
+        Uri: !Sub "http://${DrewNLB.DNSName}/users"
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+          - StatusCode: 200
+  # TODO: Add request/response models          
+  DrewAPIMethodOrders:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      ResourceId: !Ref DrewAPIResourceOrders
+      RestApiId: !Ref DrewAPI
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: HTTP_PROXY
+        Uri: !Sub "http://${DrewNLB.DNSName}/orders"
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+          - StatusCode: 200
+  # TODO: Add request/response models
+  DrewAPIMethodProducts:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      ResourceId: !Ref DrewAPIResourceProducts
+      RestApiId: !Ref DrewAPI
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: HTTP_PROXY
+        Uri: !Sub "http://${DrewNLB.DNSName}/products"
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+          - StatusCode: 200
+  DrewVpcLink:
+    Type: AWS::ApiGateway::VpcLink
+    Properties:
+      Name: DrewEksVpcLink
+      Description: VPC Link for EKS services
+      TargetArns:
+        - !GetAtt DrewNLB.LoadBalancerArn
+  DrewVpcLinkMethodUsers:
+    Type: AWS::ApiGateway::Method
+    DependsOn: DrewVpcLink
+    Properties:
+      RestApiId: !Ref DrewAPI
+      ResourceId: !Ref DrewAPIResourceUsers
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "http://${DrewNLB.DNSName}/users"
+        ConnectionType: VPC_LINK
+        ConnectionId: !Ref DrewVpcLink
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+        - StatusCode: 200
+  DrewVpcLinkMethodOrders:
+    DependsOn: DrewVpcLink
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref DrewAPI
+      ResourceId: !Ref DrewAPIResourceOrders
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "http://${DrewNLB.DNSName}/orders"
+        ConnectionType: VPC_LINK
+        ConnectionId: !Ref DrewVpcLink
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+        - StatusCode: 200
+  DrewVpcLinkMethodProducts:
+    DependsOn: DrewVpcLink
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref DrewAPI
+      ResourceId: !Ref DrewAPIResourceProducts
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "http://${DrewNLB.DNSName}/products"
+        ConnectionType: VPC_LINK
+        ConnectionId: !Ref DrewVpcLink
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+        - StatusCode: 200
+  # Unified deployment for the entire API
+  DrewDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: 
+      - DrewAPIMethodUsers
+      - DrewAPIMethodOrders
+      - DrewAPIMethodProducts
+    Properties:
+      RestApiId: !Ref DrewAPI
+      # Description: !Sub "Deployment for ${AWS::StackName} at ${AWS::Region}"
+  # Single stage for the 'prod' environment
+  DrewApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref DrewAPI
+      StageName: 'prod'
+      # AccessLogSetting:
+      #   DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
+      #   Format: '{ "requestId":"$context.requestId", "ip": "$context.identity.sourceIp", "caller":"$context.identity.caller", "user":"$context.identity.user", "requestTime":"$context.requestTime", "httpMethod":"$context.httpMethod", "resourcePath":"$context.resourcePath", "status":"$context.status", "protocol":"$context.protocol", "responseLength":"$context.responseLength" }'
+      # MethodSettings:
+      #   - ResourcePath: "/*"
+      #     HttpMethod: "*"
+      #     LoggingLevel: INFO      
+      DeploymentId: !Ref DrewDeployment
+      MethodSettings:
+        - HttpMethod: "*"
+          ResourcePath: "/*"
+          ThrottlingBurstLimit: 100
+          ThrottlingRateLimit: 50
+  # Stage configuration like logging, throttling, etc.
+  # API Gateway CloudWatch Logs
+  # ApiGatewayCloudWatchLogsRole:
+  #   Type: AWS::IAM::Role
+  #   Properties:
+  #     AssumeRolePolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal:
+  #             Service: apigateway.amazonaws.com
+  #           Action: sts:AssumeRole
+  #     Policies:
+  #       - PolicyName: ApiGatewayLogsPolicy
+  #         PolicyDocument:
+  #           Version: '2012-10-17'
+  #           Statement:
+  #             - Effect: Allow
+  #               Action:
+  #                 - logs:CreateLogGroup
+  #                 - logs:CreateLogStream
+  #                 - logs:DescribeLogGroups
+  #                 - logs:DescribeLogStreams
+  #                 - logs:PutLogEvents
+  #                 - logs:GetLogEvents
+  #                 - logs:FilterLogEvents
+  #               Resource: '*'
+  # AWS AppMesh Service Mesh
+  DrewServiceMesh:
+    Type: AWS::AppMesh::Mesh
+    Properties:
+      MeshName: DrewServiceMesh
+      Spec:
+        EgressFilter:
+          Type: ALLOW_ALL
+
+  # Virtual Node for Users Service
+  UsersVirtualNode:
+    Type: AWS::AppMesh::VirtualNode
+    Properties:
+      MeshName: !GetAtt DrewServiceMesh.MeshName
+      VirtualNodeName: users-virtual-node
+      Spec:
+        Listeners:
+          - PortMapping:
+              Port: 80
+              Protocol: http
+            # TLS:
+            #   Mode: STRICT # Enforces TLS for all inbound connections
+            #   Certificate:
+            #     ACM:
+            #       CertificateArn: arn:aws:acm:region:account-id:certificate/certificate-id
+        ServiceDiscovery:
+          AWSCloudMap:
+            NamespaceName: !Ref ClusterName
+            ServiceName: users
+        Backends:
+          - VirtualService:
+              VirtualServiceName: orders.DrewServiceMesh
+          - VirtualService:
+              VirtualServiceName: products.DrewServiceMesh
+              # ClientPolicy:
+              #   TLS:
+              #     Enforce: true
+              #     Validation:
+              #       Trust:
+              #         ACM:
+              #           CertificateAuthorityArns:
+              #             - arn:aws:acm:region:account-id:certificate/ca-certificate-id
+  # Virtual Node for Orders Service
+  OrdersVirtualNode:
+    Type: AWS::AppMesh::VirtualNode
+    Properties:
+      MeshName: !GetAtt DrewServiceMesh.MeshName
+      VirtualNodeName: orders-virtual-node
+      Spec:
+        Listeners:
+          - PortMapping:
+              Port: 80
+              Protocol: http
+        ServiceDiscovery:
+          AWSCloudMap:
+            NamespaceName: !Ref ClusterName
+            ServiceName: orders
+
+  # Virtual Node for Products Service
+  ProductsVirtualNode:
+    Type: AWS::AppMesh::VirtualNode
+    Properties:
+      MeshName: !GetAtt DrewServiceMesh.MeshName
+      VirtualNodeName: products-virtual-node
+      Spec:
+        Listeners:
+          - PortMapping:
+              Port: 80
+              Protocol: http
+        ServiceDiscovery:
+          AWSCloudMap:
+            NamespaceName: !Ref ClusterName
+            ServiceName: products
+
+  # Virtual Service for Users
+  UsersVirtualService:
+    Type: AWS::AppMesh::VirtualService
+    Properties:
+      # MeshName: !Ref DrewServiceMesh
+      MeshName: !GetAtt DrewServiceMesh.MeshName
+      VirtualServiceName: users.DrewServiceMesh
+      Spec:
+        Provider:
+          VirtualNode:
+            VirtualNodeName: !GetAtt UsersVirtualNode.VirtualNodeName
+
+  # Virtual Service for Orders
+  OrdersVirtualService:
+    Type: AWS::AppMesh::VirtualService
+    Properties:
+      # MeshName: !Ref DrewServiceMesh
+      MeshName: !GetAtt DrewServiceMesh.MeshName
+      VirtualServiceName: orders.DrewServiceMesh
+      Spec:
+        Provider:
+          VirtualNode:
+            VirtualNodeName: !GetAtt UsersVirtualNode.VirtualNodeName
+
+  # Virtual Service for Products
+  ProductsVirtualService:
+    Type: AWS::AppMesh::VirtualService
+    Properties:
+      # MeshName: !Ref DrewServiceMesh
+      MeshName: !GetAtt DrewServiceMesh.MeshName
+      VirtualServiceName: products.DrewServiceMesh
+      Spec:
+        Provider:
+          VirtualNode:
+            VirtualNodeName: !GetAtt UsersVirtualNode.VirtualNodeName
