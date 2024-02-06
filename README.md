@@ -119,6 +119,8 @@
 - Finish successfully testing and validation
 - Finish implementing mTLS and additional Cloudwatch logging
 - Finish request transformations
+- Implement a CI/CD pipeline to automate the deployment of microservices and configuration of the API Gateway and Service Mesh.
+	- I'm familiar with Github Actions, CodePipelines, and CodeDeploy, but didn't have enough time to implement a pipeline
 
 ##### Appendix
 - `kubectl get deployments`
