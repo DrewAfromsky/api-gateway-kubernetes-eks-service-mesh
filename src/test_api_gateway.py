@@ -3,7 +3,7 @@ import concurrent.futures
 import time
 
 # API endpoint
-API_ENDPOINT = "https://your-api-id.execute-api.your-region.amazonaws.com/prod/orders"
+API_ENDPOINT = "https://api-id.execute-api.region.amazonaws.com/prod/orders"
 
 # Function to send a POST request
 def send_request():
