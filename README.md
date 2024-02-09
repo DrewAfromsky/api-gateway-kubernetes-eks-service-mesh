@@ -1,7 +1,7 @@
 
 ## Drew Afromsky
 ### 02/05/2024
-#### Spring Field Capital - API Gateway and Service Mesh Implementation Assignment
+#### API Gateway and Service Mesh Implementation for e-Commerce Platform
 
 
 ##### Problem Statement
