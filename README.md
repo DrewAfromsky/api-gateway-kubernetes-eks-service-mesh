@@ -122,7 +122,7 @@
 - Use new docker base image to be compatible with ec2 instance architecture x86_64 to resolve gunicorn executable error; enable buildx/get it to run for multi-platform images
 - Update the Flask apps to be more complete (i.e. more RESTful, incorporate an RDS DB/PostgreSQL, etc)
 - Implement a CI/CD pipeline to automate the deployment of microservices and configuration of the API Gateway and Service Mesh.
-	- I'm familiar with Github Actions, CodePipelines, and CodeDeploy, but didn't have enough time to implement a pipeline
+	- Github Actions, CodePipelines, and CodeDeploy
 
 ##### Appendix
 - `kubectl get deployments`
